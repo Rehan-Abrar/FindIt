@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
+import '../../services/cloudinary_service.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../models/community_model.dart';
 import '../map/location_picker_screen.dart';
@@ -587,18 +587,18 @@ class _CreateCommunityPostScreenState extends State<CreateCommunityPostScreen> {
       final firestore = FirebaseFirestore.instance;
       String? imageUrl;
 
-      // Upload image if selected
+      // Upload image if selected (Cloudinary unsigned preset)
       if (_selectedImage != null) {
         try {
-          final storageRef = FirebaseStorage.instance
-              .ref()
-              .child('post_images')
-              .child('${DateTime.now().millisecondsSinceEpoch}_${user.uid}.jpg');
-          
-          await storageRef.putFile(_selectedImage!);
-          imageUrl = await storageRef.getDownloadURL();
+          final filename = '${DateTime.now().millisecondsSinceEpoch}_${user.uid}.jpg';
+          final url = await CloudinaryService.uploadImage(
+            file: _selectedImage,
+            folder: 'post_images',
+            filename: filename,
+          );
+          imageUrl = url;
         } catch (e) {
-          debugPrint('Error uploading image: $e');
+          debugPrint('Error uploading image to Cloudinary: $e');
           // Continue without image
         }
       }

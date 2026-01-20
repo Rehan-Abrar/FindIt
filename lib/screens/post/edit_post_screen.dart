@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../models/post_model.dart';
 import '../../widgets/navigation/app_bottom_nav_bar.dart';
-import '../home/home_screen.dart';
+import '../main/main_screen.dart';
 import '../map/location_picker_screen.dart';
 
 class EditPostScreen extends StatefulWidget {
@@ -148,7 +148,7 @@ class _EditPostScreenState extends State<EditPostScreen> {
           ),
         ),
       ),
-      bottomNavigationBar: const AppBottomNavBar(currentIndex: 4),
+      bottomNavigationBar: const SizedBox.shrink(),
     );
   }
 
@@ -498,7 +498,7 @@ class _EditPostScreenState extends State<EditPostScreen> {
         _showSnackBar('Post deleted successfully!');
         Navigator.pushAndRemoveUntil(
           context,
-          MaterialPageRoute(builder: (context) => const HomeScreen()),
+          MaterialPageRoute(builder: (context) => const MainScreen()),
           (route) => false,
         );
       }

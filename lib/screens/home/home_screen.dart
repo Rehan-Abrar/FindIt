@@ -1,10 +1,18 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../services/firestore_service.dart';
+import '../../services/database_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../../services/auth_service.dart';
 import '../../models/post_model.dart';
+import 'package:share_plus/share_plus.dart';
+import '../profile/profile_screen.dart';
+import '../inbox/inbox_screen.dart';
 import '../../widgets/navigation/app_bottom_nav_bar.dart';
 import '../post/post_detail_screen.dart';
 import '../search/search_screen.dart';
+import '../../widgets/common/user_avatar.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -16,7 +24,75 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final int _selectedIndex = 0;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final DatabaseService _databaseService = DatabaseService();
   final String? _currentUserId = FirebaseAuth.instance.currentUser?.uid;
+  final AuthService _authService = AuthService();
+  List<PostModel> _posts = [];
+  User? _currentUser;
+  StreamSubscription<User?>? _authSubscription;
+  StreamSubscription<QuerySnapshot>? _postsSubscription;
+  
+  @override
+  void initState() {
+    super.initState();
+    _loadPosts();
+  }
+
+  @override
+  void dispose() {
+    _authSubscription?.cancel();
+    _postsSubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadPosts() async {
+    // Load cached posts first
+    try {
+      final cachedPosts = await _databaseService.getCachedPosts();
+      if (mounted && cachedPosts.isNotEmpty) {
+        setState(() {
+          _posts = cachedPosts;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading cached posts: $e');
+    }
+
+    _setupRealtimeSync();
+  }
+
+  void _setupRealtimeSync() {
+    _authSubscription = _authService.authStateChanges.listen((User? user) {
+      if (mounted) {
+        setState(() {
+          _currentUser = user;
+        });
+      }
+    });
+
+    _postsSubscription = _firestore
+        .collection('posts')
+        .where('status', isEqualTo: 'active')
+        .snapshots()
+        .listen((snapshot) async {
+      final posts = snapshot.docs.map((doc) {
+        final data = doc.data();
+        data['postId'] = doc.id;
+        return PostModel.fromMap(data);
+      }).toList();
+
+      // Sort by date
+      posts.sort((a, b) => (b.createdAt ?? DateTime.now()).compareTo(a.createdAt ?? DateTime.now()));
+
+      if (mounted) {
+        setState(() {
+          _posts = posts;
+        });
+        // Cache new posts
+        await _databaseService.cachePosts(posts);
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -35,7 +111,6 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-      bottomNavigationBar: const AppBottomNavBar(currentIndex: 0),
     );
   }
 
@@ -85,18 +160,26 @@ class _HomeScreenState extends State<HomeScreen> {
               
               const SizedBox(width: 8),
               
-              // Message/Send button
-              Container(
-                width: 48,
-                height: 48,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF5DBDA8),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.send,
-                  color: Colors.white,
-                  size: 24,
+              // Message/Send button -> Inbox
+              GestureDetector(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => InboxScreen()),
+                  );
+                },
+                child: Container(
+                  width: 48,
+                  height: 48,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF5DBDA8),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.send,
+                    color: Colors.white,
+                    size: 24,
+                  ),
                 ),
               ),
             ],
@@ -107,59 +190,33 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildContent() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: _firestore
-          .collection('posts')
-          .orderBy('createdAt', descending: true)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(
-            child: CircularProgressIndicator(
-              color: Color(0xFF5DBDA8),
-            ),
-          );
-        }
+    if (_posts.isEmpty) {
+      return const Center(child: CircularProgressIndicator(color: Color(0xFF5DBDA8)));
+    }
 
-        if (snapshot.hasError) {
-          print('Firestore Error: ${snapshot.error}');
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.error_outline, size: 48, color: Colors.red),
-                const SizedBox(height: 16),
-                Text('Error loading posts'),
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: () => setState(() {}),
-                  child: const Text('Retry'),
-                ),
-              ],
-            ),
-          );
-        }
+    // Filter logic (assuming _selectedIndex is for filter tabs if they existed, but here we only have local list)
+    // Actually HomeScreen doesn't seem to have filter tabs in the viewed code, it just showed a list.
+    // Wait, previous code had `_selectedFilter` in `ProfileScreen` but `HomeScreen` in the view I just saw (Step 129) DOES NOT have filter tabs in `_buildContent`.
+    // It just shows all active posts.
+    
+    // However, I see `_selectedIndex` initialized to 0 in State, but it's not used.
+    
+    // Let's just return the list.
+    final posts = _posts;
+    // Note: The previous StreamBuilder also filtered out community posts.
+    // .where((post) => post.status == 'active' && post.communityId == null)
+    
+    final displayPosts = posts.where((post) => post.communityId == null).toList();
 
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return _buildEmptyState();
-        }
+    if (displayPosts.isEmpty) {
+      return _buildEmptyState();
+    }
 
-        final posts = snapshot.data!.docs
-            .map((doc) => PostModel.fromMap(doc.data() as Map<String, dynamic>))
-            .where((post) => post.status == 'active' && post.communityId == null) // Filter out community posts
-            .toList();
-
-        if (posts.isEmpty) {
-          return _buildEmptyState();
-        }
-
-        return ListView.builder(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          itemCount: posts.length,
-          itemBuilder: (context, index) {
-            return _buildPostCard(posts[index]);
-          },
-        );
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: displayPosts.length,
+      itemBuilder: (context, index) {
+        return _buildPostCard(displayPosts[index]);
       },
     );
   }
@@ -199,184 +256,205 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildPostCard(PostModel post) {
     final bool isLiked = _currentUserId != null && post.likedBy.contains(_currentUserId);
     
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // User Info Header
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                // Profile Picture
-                CircleAvatar(
-                  radius: 22,
-                  backgroundColor: const Color(0xFF5DBDA8).withOpacity(0.2),
-                  backgroundImage: post.userPhotoUrl != null
-                      ? NetworkImage(post.userPhotoUrl!)
-                      : null,
-                  child: post.userPhotoUrl == null
-                      ? Text(
-                          post.userName.isNotEmpty ? post.userName[0].toUpperCase() : 'A',
-                          style: const TextStyle(
-                            color: Color(0xFF5DBDA8),
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
+    return GestureDetector(
+      onTap: () => _openPostDetail(post),
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // User Info Header
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  // Profile Picture (tap to open profile)
+                  UserAvatar(
+                    userId: post.userId,
+                    initialPhotoUrl: post.userPhotoUrl,
+                    displayName: post.userName,
+                    radius: 22,
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => ProfileScreen(userId: post.userId)),
+                      );
+                    },
+                  ),
+                  const SizedBox(width: 12),
+                  // Name and Location
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        GestureDetector(
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => ProfileScreen(userId: post.userId)),
+                            );
+                          },
+                          child: Text(
+                            post.userName,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
                           ),
-                        )
-                      : null,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Item ${post.type} in ${post.locationName}',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 12,
+                          ),
+                        ),
+                        Text(
+                          _getTimeAgo(post.createdAt),
+                          style: TextStyle(
+                            color: Colors.grey[400],
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // More Options
+                  IconButton(
+                    icon: const Icon(Icons.more_vert),
+                    onPressed: () {
+                      _showPostOptions(post);
+                    },
+                  ),
+                ],
+              ),
+            ),
+            
+            // Post Description
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Text(
+                post.description,
+                style: const TextStyle(
+                  fontSize: 14,
+                  height: 1.4,
                 ),
-                const SizedBox(width: 12),
-                // Name and Location
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        post.userName,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            
+            const SizedBox(height: 12),
+            
+            // Post Image (if exists)
+            if (post.images.isNotEmpty)
+              Container(
+                width: double.infinity,
+                height: 200,
+                margin: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  color: Colors.grey[200],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.network(
+                    post.images.first,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        color: Colors.grey[200],
+                        child: const Icon(
+                          Icons.image_not_supported,
+                          color: Colors.grey,
+                          size: 50,
                         ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Item ${post.type} in ${post.locationName}',
-                        style: TextStyle(
-                          color: Colors.grey[600],
-                          fontSize: 12,
-                        ),
-                      ),
-                      Text(
-                        _getTimeAgo(post.createdAt),
-                        style: TextStyle(
-                          color: Colors.grey[400],
-                          fontSize: 11,
-                        ),
-                      ),
-                    ],
+                      );
+                    },
                   ),
                 ),
-                // More Options
-                IconButton(
-                  icon: const Icon(Icons.more_vert),
-                  onPressed: () {
-                    _showPostOptions(post);
-                  },
+              )
+            else
+              Container(
+                width: double.infinity,
+                height: 200,
+                margin: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  color: Colors.grey[200],
                 ),
-              ],
-            ),
-          ),
-          
-          // Post Description
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Text(
-              post.description,
-              style: const TextStyle(
-                fontSize: 14,
-                height: 1.4,
-              ),
-              maxLines: 4,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          
-          const SizedBox(height: 12),
-          
-          // Post Image (if exists)
-          if (post.images.isNotEmpty)
-            Container(
-              width: double.infinity,
-              height: 200,
-              margin: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                color: Colors.grey[200],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.network(
-                  post.images.first,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    return Container(
-                      color: Colors.grey[200],
-                      child: const Icon(
-                        Icons.image_not_supported,
-                        color: Colors.grey,
-                        size: 50,
-                      ),
-                    );
-                  },
+                child: const Icon(
+                  Icons.image,
+                  color: Colors.grey,
+                  size: 50,
                 ),
               ),
-            )
-          else
-            Container(
-              width: double.infinity,
-              height: 200,
-              margin: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                color: Colors.grey[200],
-              ),
-              child: const Icon(
-                Icons.image,
-                color: Colors.grey,
-                size: 50,
+            
+            const SizedBox(height: 12),
+            
+            // Interaction Buttons
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  // Like Button
+                  GestureDetector(
+                    onTap: () {
+                      _toggleLike(post);
+                    },
+                    child: _buildInteractionButton(
+                      icon: isLiked ? Icons.favorite : Icons.favorite_border,
+                      count: post.likes,
+                      color: isLiked ? Colors.red : const Color(0xFF5DBDA8),
+                      onTap: () => _toggleLike(post),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  // Comment Button
+                  _buildInteractionButton(
+                    icon: Icons.chat_bubble_outline,
+                    count: post.comments,
+                    color: const Color(0xFF5DBDA8),
+                    onTap: () => _openPostDetail(post),
+                  ),
+                  const SizedBox(width: 16),
+                  // Share Button
+                  _buildInteractionButton(
+                    icon: Icons.send_outlined,
+                    count: post.shares,
+                    color: const Color(0xFF5DBDA8),
+                    onTap: () async {
+                      final title = post.title;
+                      final desc = post.description;
+                      final urls = post.images.join('\n');
+                      final text = '$title\n\n$desc\n\n$urls';
+                      try {
+                        await Share.share(text);
+                        // Optionally increment share count in Firestore
+                        await _firestore.collection('posts').doc(post.postId).update({'shares': FieldValue.increment(1)});
+                      } catch (e) {
+                        _showSnackBar('Share failed');
+                      }
+                    },
+                  ),
+                ],
               ),
             ),
-          
-          const SizedBox(height: 12),
-          
-          // Interaction Buttons
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Row(
-              children: [
-                // Like Button
-                _buildInteractionButton(
-                  icon: isLiked ? Icons.favorite : Icons.favorite_border,
-                  count: post.likes,
-                  color: isLiked ? Colors.red : const Color(0xFF5DBDA8),
-                  onTap: () => _toggleLike(post),
-                ),
-                const SizedBox(width: 16),
-                // Comment Button
-                _buildInteractionButton(
-                  icon: Icons.chat_bubble_outline,
-                  count: post.comments,
-                  color: const Color(0xFF5DBDA8),
-                  onTap: () => _openPostDetail(post),
-                ),
-                const SizedBox(width: 16),
-                // Share Button
-                _buildInteractionButton(
-                  icon: Icons.send_outlined,
-                  count: post.shares,
-                  color: const Color(0xFF5DBDA8),
-                  onTap: () {
-                    // TODO: Implement share functionality
-                  },
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-        ],
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
     );
   }
@@ -432,21 +510,35 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _toggleLike(PostModel post) async {
     if (_currentUserId == null) return;
-    
+
     final postRef = _firestore.collection('posts').doc(post.postId);
-    
-    if (post.likedBy.contains(_currentUserId)) {
-      // Unlike
-      await postRef.update({
-        'likes': FieldValue.increment(-1),
-        'likedBy': FieldValue.arrayRemove([_currentUserId]),
+
+    try {
+      await _firestore.runTransaction((tx) async {
+        final snap = await tx.get(postRef);
+        if (!snap.exists) return;
+
+        final data = snap.data() as Map<String, dynamic>? ?? {};
+        final List<dynamic> likedByRaw = data['likedBy'] ?? [];
+        final likedBy = likedByRaw.map((e) => e.toString()).toList();
+
+        if (likedBy.contains(_currentUserId)) {
+          // Unlike
+          tx.update(postRef, {
+            'likes': FieldValue.increment(-1),
+            'likedBy': FieldValue.arrayRemove([_currentUserId]),
+          });
+        } else {
+          // Like
+          tx.update(postRef, {
+            'likes': FieldValue.increment(1),
+            'likedBy': FieldValue.arrayUnion([_currentUserId]),
+          });
+        }
       });
-    } else {
-      // Like
-      await postRef.update({
-        'likes': FieldValue.increment(1),
-        'likedBy': FieldValue.arrayUnion([_currentUserId]),
-      });
+    } catch (e) {
+      print('Error toggling like: $e');
+      _showSnackBar('Failed to update like');
     }
   }
 
@@ -498,9 +590,18 @@ class _HomeScreenState extends State<HomeScreen> {
                       iconColor: Colors.grey[700]!,
                       title: 'Save Post',
                       subtitle: 'Add this to your saved posts.',
-                      onTap: () {
+                      onTap: () async {
                         Navigator.pop(context);
-                        _showSnackBar('Post saved!');
+                        if (_currentUserId == null) {
+                          _showSnackBar('Please login to save posts');
+                          return;
+                        }
+                        try {
+                          await FirestoreService().savePost(_currentUserId!, post.postId);
+                          _showSnackBar('Post saved!');
+                        } catch (e) {
+                          _showSnackBar('Failed to save post');
+                        }
                       },
                     ),
                     
@@ -512,7 +613,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       subtitle: 'Open the profile of the author',
                       onTap: () {
                         Navigator.pop(context);
-                        // TODO: Navigate to author's profile
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => ProfileScreen(userId: post.userId)),
+                        );
                       },
                     ),
                     
@@ -553,6 +657,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 titleColor: Colors.red,
                 onTap: () {
                   Navigator.pop(context);
+                  if (_currentUserId == null) {
+                    _showSnackBar('Please login to report');
+                    return;
+                  }
                   _showReportDialog(post, isUser: false);
                 },
               ),
@@ -566,12 +674,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 titleColor: Colors.red,
                 onTap: () {
                   Navigator.pop(context);
+                  if (_currentUserId == null) {
+                    _showSnackBar('Please login to report');
+                    return;
+                  }
                   _showReportDialog(post, isUser: true);
                 },
               ),
               
               // Delete Post (only for owner)
-              if (post.userId == _currentUserId) ...[
+              if (_currentUserId != null && post.userId == _currentUserId) ...[
                 const SizedBox(height: 8),
                 Divider(color: Colors.grey[200], thickness: 1),
                 const SizedBox(height: 8),

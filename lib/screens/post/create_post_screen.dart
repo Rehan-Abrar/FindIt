@@ -1,9 +1,31 @@
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:http/http.dart' as http;
+
+import '../../config/cloudinary_config.dart';
 import '../../widgets/navigation/app_bottom_nav_bar.dart';
-import '../home/home_screen.dart';
+import '../main/main_screen.dart';
 import '../map/location_picker_screen.dart';
+import '../../widgets/common/app_back_button.dart';
+
+enum UploadStatus { pending, uploading, success, failed }
+
+class _PickedImage {
+  Uint8List? bytes;
+  String? path;
+  bool isWeb;
+  UploadStatus status;
+  String? uploadedUrl;
+
+  _PickedImage({this.bytes, this.path, this.isWeb = false, this.status = UploadStatus.pending, this.uploadedUrl});
+}
 
 class CreatePostScreen extends StatefulWidget {
   const CreatePostScreen({super.key});
@@ -21,12 +43,23 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   final TextEditingController _dateController = TextEditingController();
   final TextEditingController _locationController = TextEditingController();
   DateTime? _selectedDate;
+  String? _selectedCategory;
+  final List<Map<String, String>> _categories = [
+    {'label': 'Electronics', 'examples': 'phones, laptops, headphones, cameras'},
+    {'label': 'Documents / IDs', 'examples': 'passport, ID card, certificates'},
+    {'label': 'Keys & Access items', 'examples': 'house keys, car keys, RFID cards'},
+    {'label': 'Jewelry / Accessories', 'examples': 'watches, rings, handbags'},
+    {'label': 'Clothing / Footwear', 'examples': 'valuable shoes, jackets, bags'},
+    {'label': 'Pets', 'examples': 'dogs, cats, birds'},
+    {'label': 'Miscellaneous', 'examples': 'instruments, collectibles'},
+  ];
   
   // Location coordinates
   double? _latitude;
   double? _longitude;
   
-  final List<String> _selectedImages = [];
+  final List<_PickedImage> _selectedImages = [];
+  final ImagePicker _imagePicker = ImagePicker();
 
   @override
   void dispose() {
@@ -79,11 +112,8 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
                     
                     const SizedBox(height: 16),
                     
-                    // Category Field
-                    _buildTextField(
-                      controller: _categoryController,
-                      hintText: 'Category...',
-                    ),
+                    // Category Field (Dropdown)
+                    _buildCategoryDropdown(),
                     
                     const SizedBox(height: 16),
                     
@@ -108,6 +138,8 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
                     const SizedBox(height: 20),
                     
                     // Add Image Button
+                    _buildImagePreview(),
+                    const SizedBox(height: 12),
                     _buildAddImageButton(),
                     
                     const SizedBox(height: 24),
@@ -130,27 +162,18 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   }
 
   Widget _buildBackButton() {
-    return GestureDetector(
+    return AppBackButton(
       onTap: () {
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (context) => const HomeScreen()),
-          (route) => false,
-        );
+        if (Navigator.canPop(context)) {
+          Navigator.pop(context);
+        } else {
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => const MainScreen()),
+            (route) => false,
+          );
+        }
       },
-      child: Container(
-        width: 48,
-        height: 48,
-        decoration: const BoxDecoration(
-          color: Color(0xFF5DBDA8),
-          shape: BoxShape.circle,
-        ),
-        child: const Icon(
-          Icons.chevron_left,
-          color: Colors.white,
-          size: 32,
-        ),
-      ),
     );
   }
 
@@ -250,6 +273,49 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
             horizontal: 16,
             vertical: 14,
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCategoryDropdown() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: const Color(0xFF5DBDA8),
+          width: 1.5,
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButtonFormField<String>(
+          value: _selectedCategory,
+          isExpanded: true,
+          isDense: true,
+          decoration: InputDecoration(
+            hintText: 'Select category...',
+            hintStyle: TextStyle(color: Colors.grey[400], fontSize: 14),
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
+          ),
+          items: _categories.map((c) {
+            final label = c['label']!;
+            return DropdownMenuItem<String>(
+              value: label,
+              child: Text(
+                label,
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+            );
+          }).toList(),
+          onChanged: (val) {
+            setState(() {
+              _selectedCategory = val;
+              _categoryController.text = val ?? '';
+            });
+          },
         ),
       ),
     );
@@ -391,17 +457,17 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
               ListTile(
                 leading: const Icon(Icons.camera_alt, color: Color(0xFF5DBDA8)),
                 title: const Text('Take a Photo'),
-                onTap: () {
+                onTap: () async {
                   Navigator.pop(context);
-                  // TODO: Implement camera capture
+                  await _pickImageFromCamera();
                 },
               ),
               ListTile(
                 leading: const Icon(Icons.photo_library, color: Color(0xFF5DBDA8)),
                 title: const Text('Choose from Gallery'),
-                onTap: () {
+                onTap: () async {
                   Navigator.pop(context);
-                  // TODO: Implement gallery picker
+                  await _pickImagesFromGallery();
                 },
               ),
             ],
@@ -409,6 +475,201 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
         );
       },
     );
+  }
+
+  Future<void> _pickImageFromCamera() async {
+    try {
+      if (kIsWeb) {
+        // On web, ImagePicker shows the browser file picker (may allow camera on some browsers)
+        final XFile? picked = await _imagePicker.pickImage(
+          source: ImageSource.camera,
+          imageQuality: 80,
+        );
+
+        if (picked != null) {
+          final bytes = await picked.readAsBytes();
+          setState(() {
+            _selectedImages.add(_PickedImage(bytes: bytes, path: picked.name, isWeb: true));
+          });
+        }
+      } else {
+        final XFile? picked = await _imagePicker.pickImage(
+          source: ImageSource.camera,
+          imageQuality: 80,
+        );
+
+        if (picked != null) {
+          setState(() {
+            _selectedImages.add(_PickedImage(path: picked.path, isWeb: false));
+          });
+        }
+      }
+    } on Exception catch (e) {
+      _showSnackBar('Camera error: ${e.toString()}');
+    }
+  }
+
+  Future<void> _pickImagesFromGallery() async {
+    try {
+      if (kIsWeb) {
+        // On web, pickMultiImage is not reliably supported. Use single-image picker.
+        final XFile? picked = await _imagePicker.pickImage(
+          source: ImageSource.gallery,
+          imageQuality: 80,
+        );
+        if (picked != null) {
+          final bytes = await picked.readAsBytes();
+          setState(() {
+            _selectedImages.add(_PickedImage(bytes: bytes, path: picked.name, isWeb: true));
+          });
+          _showSnackBar('Image added. Select "Add Image" again for more images.');
+        }
+      } else {
+        final List<XFile>? picked = await _imagePicker.pickMultiImage(imageQuality: 80);
+        if (picked != null && picked.isNotEmpty) {
+          setState(() {
+            for (final x in picked) {
+              _selectedImages.add(_PickedImage(path: x.path, isWeb: false));
+            }
+          });
+        }
+      }
+    } on Exception catch (e) {
+      _showSnackBar('Gallery error: ${e.toString()}');
+    }
+  }
+
+  Widget _buildImagePreview() {
+    if (_selectedImages.isEmpty) return const SizedBox.shrink();
+
+    return SizedBox(
+      height: 110,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        itemCount: _selectedImages.length,
+        itemBuilder: (context, index) {
+          final item = _selectedImages[index];
+          return Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: Stack(
+              children: [
+                Container(
+                  width: 100,
+                  height: 100,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    color: Colors.grey[200],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: item.isWeb
+                        ? (item.bytes != null
+                            ? Image.memory(item.bytes!, fit: BoxFit.cover)
+                            : const SizedBox.shrink())
+                        : Image.file(File(item.path ?? ''), fit: BoxFit.cover),
+                  ),
+                ),
+                Positioned(
+                  top: 4,
+                  right: 4,
+                  child: Column(
+                    children: [
+                      GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _selectedImages.removeAt(index);
+                          });
+                        },
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.6),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.close, size: 18, color: Colors.white),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      _buildUploadStatusIcon(item.status),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildUploadStatusIcon(UploadStatus status) {
+    switch (status) {
+      case UploadStatus.uploading:
+        return const SizedBox(
+          width: 22,
+          height: 22,
+          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+        );
+      case UploadStatus.success:
+        return Container(
+          decoration: BoxDecoration(color: Colors.green.withOpacity(0.8), shape: BoxShape.circle),
+          padding: const EdgeInsets.all(4),
+          child: const Icon(Icons.check, size: 16, color: Colors.white),
+        );
+      case UploadStatus.failed:
+        return Container(
+          decoration: BoxDecoration(color: Colors.red.withOpacity(0.9), shape: BoxShape.circle),
+          padding: const EdgeInsets.all(4),
+          child: const Icon(Icons.error, size: 16, color: Colors.white),
+        );
+      case UploadStatus.pending:
+      default:
+        return Container(
+          decoration: BoxDecoration(color: Colors.grey.withOpacity(0.6), shape: BoxShape.circle),
+          padding: const EdgeInsets.all(4),
+          child: const Icon(Icons.hourglass_empty, size: 16, color: Colors.white),
+        );
+    }
+  }
+
+  Future<String?> _uploadToCloudinary(_PickedImage img, String postId, int index) async {
+    try {
+      final uri = Uri.parse('https://api.cloudinary.com/v1_1/$CLOUDINARY_CLOUD_NAME/image/upload');
+      final request = http.MultipartRequest('POST', uri);
+      request.fields['upload_preset'] = CLOUDINARY_UPLOAD_PRESET;
+      request.fields['folder'] = 'posts/$postId';
+
+      if (img.isWeb) {
+        final bytes = img.bytes;
+        if (bytes == null) return null;
+        final multipartFile = http.MultipartFile.fromBytes(
+          'file',
+          bytes,
+          filename: '${postId}_$index.jpg',
+        );
+        request.files.add(multipartFile);
+      } else {
+        final file = File(img.path!);
+        final multipartFile = await http.MultipartFile.fromPath(
+          'file',
+          file.path,
+          filename: '${postId}_$index.jpg',
+        );
+        request.files.add(multipartFile);
+      }
+
+      final streamed = await request.send();
+      final response = await http.Response.fromStream(streamed);
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final body = json.decode(response.body) as Map<String, dynamic>;
+        return body['secure_url'] as String?;
+      } else {
+        debugPrint('Cloudinary upload failed: ${response.statusCode} ${response.body}');
+        return null;
+      }
+    } catch (e) {
+      debugPrint('Cloudinary upload exception: $e');
+      return null;
+    }
   }
 
   Widget _buildPostButton() {
@@ -497,7 +758,41 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
       
       final postRef = firestore.collection('posts').doc();
       debugPrint('Creating post with ID: ${postRef.id}');
-      
+
+      // Upload selected images to Cloudinary (if any) and collect URLs
+      final List<String> uploadedImageUrls = [];
+      if (_selectedImages.isNotEmpty) {
+        for (int i = 0; i < _selectedImages.length; i++) {
+          final _PickedImage img = _selectedImages[i];
+          try {
+            setState(() {
+              img.status = UploadStatus.uploading;
+            });
+            final url = await _uploadToCloudinary(img, postRef.id, i);
+            if (url != null) {
+              uploadedImageUrls.add(url);
+              setState(() {
+                img.status = UploadStatus.success;
+                img.uploadedUrl = url;
+              });
+              _showSnackBar('Image ${i + 1} uploaded');
+            } else {
+              debugPrint('Cloudinary returned null URL for image $i');
+              setState(() {
+                img.status = UploadStatus.failed;
+              });
+              _showSnackBar('Failed to upload one or more images.');
+            }
+          } catch (e) {
+            debugPrint('Image upload failed: $e');
+            setState(() {
+              img.status = UploadStatus.failed;
+            });
+            _showSnackBar('Failed to upload one or more images.');
+          }
+        }
+      }
+
       final postData = <String, dynamic>{
         'postId': postRef.id,
         'userId': user.uid,
@@ -507,7 +802,7 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
         'title': _titleController.text.trim(),
         'description': _descriptionController.text.trim(),
         'category': _categoryController.text.trim().isNotEmpty ? _categoryController.text.trim() : 'General',
-        'images': <String>[],
+        'images': uploadedImageUrls,
         'location': _latitude != null && _longitude != null 
             ? GeoPoint(_latitude!, _longitude!) 
             : null,
@@ -564,6 +859,6 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   }
 
   Widget _buildBottomNavBar() {
-    return const AppBottomNavBar(currentIndex: 2);
+    return const SizedBox.shrink();
   }
 }

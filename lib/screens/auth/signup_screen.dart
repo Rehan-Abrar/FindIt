@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import '../home/home_screen.dart';
+import '../../screens/main/main_screen.dart';
 import '../../services/auth_service.dart';
+import '../../utils/validation_utils.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -111,6 +112,7 @@ class _SignupScreenState extends State<SignupScreen> {
                     ),
                   ),
                   keyboardType: TextInputType.number,
+                  inputFormatters: [CNICFormatter()],
                 ),
                 const SizedBox(height: 16),
 
@@ -280,6 +282,18 @@ class _SignupScreenState extends State<SignupScreen> {
       return;
     }
 
+    // Validate email format
+    if (!ValidationUtils.isValidEmail(_emailController.text)) {
+      _showErrorDialog('Please enter a valid email address');
+      return;
+    }
+
+    // Validate CNIC format
+    if (!ValidationUtils.isValidCNIC(_cnicController.text)) {
+      _showErrorDialog('Please enter a valid CNIC (12345-1234567-1)');
+      return;
+    }
+
     // Validate name length
     if (_nameController.text.trim().length < 2) {
       _showErrorDialog('Please enter a valid name');
@@ -320,7 +334,7 @@ class _SignupScreenState extends State<SignupScreen> {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (context) => const HomeScreen(),
+            builder: (context) => const MainScreen(),
           ),
         );
       }

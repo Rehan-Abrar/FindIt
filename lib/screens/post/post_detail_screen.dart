@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../models/post_model.dart';
+import '../../services/firestore_service.dart';
+import '../inbox/chat_screen.dart';
+import '../../widgets/common/user_avatar.dart';
+import '../../widgets/common/app_back_button.dart';
 
 class PostDetailScreen extends StatefulWidget {
   final PostModel post;
@@ -16,7 +21,9 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final String? _currentUserId = FirebaseAuth.instance.currentUser?.uid;
   final TextEditingController _commentController = TextEditingController();
+  final FocusNode _commentFocusNode = FocusNode();
   late PostModel _post;
+  String? _replyToCommentId;
 
   @override
   void initState() {
@@ -27,6 +34,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   @override
   void dispose() {
     _commentController.dispose();
+    _commentFocusNode.dispose();
     super.dispose();
   }
 
@@ -42,25 +50,9 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Back Button
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: GestureDetector(
-                        onTap: () => Navigator.pop(context),
-                        child: Container(
-                          width: 48,
-                          height: 48,
-                          decoration: const BoxDecoration(
-                            color: Color(0xFF5DBDA8),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.chevron_left,
-                            color: Colors.white,
-                            size: 32,
-                          ),
-                        ),
-                      ),
+                    const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: AppBackButton(),
                     ),
 
                     // Post Content
@@ -114,24 +106,11 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                 padding: const EdgeInsets.all(12),
                 child: Row(
                   children: [
-                    CircleAvatar(
+                    UserAvatar(
+                      userId: _post.userId,
+                      initialPhotoUrl: _post.userPhotoUrl,
+                      displayName: _post.userName,
                       radius: 22,
-                      backgroundColor: const Color(0xFF5DBDA8).withOpacity(0.2),
-                      backgroundImage: _post.userPhotoUrl != null
-                          ? NetworkImage(_post.userPhotoUrl!)
-                          : null,
-                      child: _post.userPhotoUrl == null
-                          ? Text(
-                              _post.userName.isNotEmpty
-                                  ? _post.userName[0].toUpperCase()
-                                  : 'A',
-                              style: const TextStyle(
-                                color: Color(0xFF5DBDA8),
-                                fontWeight: FontWeight.bold,
-                                fontSize: 18,
-                              ),
-                            )
-                          : null,
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -254,7 +233,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                       icon: Icons.send_outlined,
                       count: _post.shares,
                       color: const Color(0xFF5DBDA8),
-                      onTap: () {},
+                      onTap: () => _sharePost(),
                     ),
                   ],
                 ),
@@ -330,6 +309,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                   ),
                   child: TextField(
                     controller: _commentController,
+                    focusNode: _commentFocusNode,
                     decoration: const InputDecoration(
                       hintText: 'Add a comment...',
                       border: InputBorder.none,
@@ -389,8 +369,8 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                 physics: const NeverScrollableScrollPhysics(),
                 itemCount: snapshot.data!.docs.length,
                 itemBuilder: (context, index) {
-                  final comment = snapshot.data!.docs[index].data() as Map<String, dynamic>;
-                  return _buildCommentItem(comment);
+                  final doc = snapshot.data!.docs[index];
+                  return _buildCommentItem(doc);
                 },
               );
             },
@@ -400,7 +380,14 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
     );
   }
 
-  Widget _buildCommentItem(Map<String, dynamic> comment) {
+  Widget _buildCommentItem(DocumentSnapshot commentDoc) {
+    final comment = commentDoc.data() as Map<String, dynamic>? ?? {};
+    final String commentId = commentDoc.id;
+    final List likedBy = List.from(comment['likedBy'] ?? []);
+    final List dislikedBy = List.from(comment['dislikedBy'] ?? []);
+    final int likesCount = comment['likes'] ?? likedBy.length;
+    final int dislikesCount = comment['dislikes'] ?? dislikedBy.length;
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
@@ -424,11 +411,14 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
               children: [
                 Row(
                   children: [
-                    Text(
-                      comment['userName'] ?? 'Anonymous',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
+                    Expanded(
+                      child: Text(
+                        comment['userName'] ?? 'Anonymous',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -452,19 +442,30 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
           // Like/Dislike buttons for comments
           Row(
             children: [
+              // Like
               IconButton(
-                icon: const Icon(Icons.thumb_up_outlined, size: 18),
-                onPressed: () {},
-                color: Colors.grey,
+                icon: Icon(
+                  likedBy.contains(_currentUserId) ? Icons.thumb_up : Icons.thumb_up_outlined,
+                  size: 18,
+                  color: likedBy.contains(_currentUserId) ? Colors.blue : Colors.grey,
+                ),
+                onPressed: () => _toggleCommentLike(commentId),
               ),
+              Text(likesCount.toString()),
+              // Dislike
               IconButton(
-                icon: const Icon(Icons.thumb_down_outlined, size: 18),
-                onPressed: () {},
-                color: Colors.grey,
+                icon: Icon(
+                  dislikedBy.contains(_currentUserId) ? Icons.thumb_down : Icons.thumb_down_outlined,
+                  size: 18,
+                  color: dislikedBy.contains(_currentUserId) ? Colors.red : Colors.grey,
+                ),
+                onPressed: () => _toggleCommentDislike(commentId),
               ),
+              Text(dislikesCount.toString()),
+              // Reply
               IconButton(
                 icon: const Icon(Icons.chat_bubble_outline, size: 18),
-                onPressed: () {},
+                onPressed: () => _startReplyToComment(commentId, comment['userName'] ?? 'User'),
                 color: Colors.grey,
               ),
             ],
@@ -505,86 +506,315 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   }
 
   Future<void> _toggleLike() async {
-    if (_currentUserId == null) return;
+    if (_currentUserId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please sign in to like posts')),
+      );
+      return;
+    }
+    
+    if (_post.postId.isEmpty) {
+      debugPrint('Error: Post ID is empty');
+      return;
+    }
     
     final postRef = _firestore.collection('posts').doc(_post.postId);
     
-    if (_post.likedBy.contains(_currentUserId)) {
-      await postRef.update({
-        'likes': FieldValue.increment(-1),
-        'likedBy': FieldValue.arrayRemove([_currentUserId]),
-      });
-    } else {
-      await postRef.update({
-        'likes': FieldValue.increment(1),
-        'likedBy': FieldValue.arrayUnion([_currentUserId]),
-      });
+    try {
+      if (_post.likedBy.contains(_currentUserId)) {
+        await postRef.update({
+          'likes': FieldValue.increment(-1),
+          'likedBy': FieldValue.arrayRemove([_currentUserId]),
+        });
+      } else {
+        await postRef.update({
+          'likes': FieldValue.increment(1),
+          'likedBy': FieldValue.arrayUnion([_currentUserId]),
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to toggle like: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _sharePost() async {
+    final shareText = 'Check out this ${_post.type} item on FindIt: ${_post.title}\n\n${_post.description}\n\nLocation: ${_post.locationName}';
+    
+    try {
+      await Share.share(shareText);
+      
+      // Increment share count in Firestore
+      if (_post.postId.isNotEmpty) {
+        await _firestore.collection('posts').doc(_post.postId).update({
+          'shares': FieldValue.increment(1),
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to share post: $e');
     }
   }
 
   Future<void> _addComment() async {
-    if (_commentController.text.trim().isEmpty) return;
-    if (_currentUserId == null) return;
-
-    final user = FirebaseAuth.instance.currentUser;
-    String userName = 'Anonymous';
-
-    if (user != null) {
-      final userDoc = await _firestore.collection('users').doc(user.uid).get();
-      if (userDoc.exists) {
-        userName = userDoc.data()?['displayName'] ?? user.displayName ?? 'Anonymous';
-      } else {
-        userName = user.displayName ?? 'Anonymous';
-      }
+    final text = _commentController.text.trim();
+    if (text.isEmpty) return;
+    
+    if (_currentUserId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You must be signed in to add a comment')),
+      );
+      return;
     }
 
-    await _firestore
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      String userName = 'Anonymous';
+
+      if (user != null) {
+        // Try getting name from local user object first to be faster
+        userName = user.displayName ?? 'Anonymous';
+      }
+
+      final commentData = {
+        'userId': _currentUserId ?? '',
+        'userName': userName,
+        'text': text,
+        'createdAt': FieldValue.serverTimestamp(),
+        'likes': 0,
+        'likedBy': <String>[],
+        'dislikes': 0,
+        'dislikedBy': <String>[],
+      };
+      
+      final replyTo = _replyToCommentId;
+      if (replyTo != null) {
+        commentData['replyTo'] = replyTo;
+      }
+
+      // Use a batch to perform both writes atomically
+      final batch = _firestore.batch();
+      
+      // 1. Add the comment
+      final commentRef = _firestore
+          .collection('posts')
+          .doc(_post.postId)
+          .collection('comments')
+          .doc();
+      
+      batch.set(commentRef, commentData);
+
+      // 2. Update post comment count
+      final postRef = _firestore.collection('posts').doc(_post.postId);
+      batch.update(postRef, {
+        'comments': FieldValue.increment(1),
+      });
+
+      await batch.commit();
+
+      if (mounted) {
+        _commentController.clear();
+        setState(() {
+          _replyToCommentId = null;
+        });
+        _commentFocusNode.unfocus();
+      }
+    } catch (e) {
+      debugPrint('Failed to add comment: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _toggleCommentLike(String commentId) async {
+    if (_currentUserId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sign in to like comments')),
+      );
+      return;
+    }
+
+    final commentRef = _firestore
         .collection('posts')
         .doc(_post.postId)
         .collection('comments')
-        .add({
-      'userId': _currentUserId,
-      'userName': userName,
-      'text': _commentController.text.trim(),
-      'createdAt': FieldValue.serverTimestamp(),
-    });
+        .doc(commentId);
 
-    // Update comment count
-    await _firestore.collection('posts').doc(_post.postId).update({
-      'comments': FieldValue.increment(1),
-    });
+    try {
+      final snap = await commentRef.get();
+      if (!snap.exists) return;
+      final data = snap.data() as Map<String, dynamic>;
+      final List likedBy = List.from(data['likedBy'] ?? []);
+      final List dislikedBy = List.from(data['dislikedBy'] ?? []);
 
-    _commentController.clear();
+      if (likedBy.contains(_currentUserId)) {
+        await commentRef.update({
+          'likes': FieldValue.increment(-1),
+          'likedBy': FieldValue.arrayRemove([_currentUserId])
+        });
+      } else {
+        final Map<String, Object> update = {
+          'likes': FieldValue.increment(1),
+          'likedBy': FieldValue.arrayUnion([_currentUserId])
+        };
+        if (dislikedBy.contains(_currentUserId)) {
+          update['dislikes'] = FieldValue.increment(-1);
+          update['dislikedBy'] = FieldValue.arrayRemove([_currentUserId]);
+        }
+        await commentRef.update(update);
+      }
+    } catch (e) {
+      debugPrint('Error toggling comment like: $e');
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to update like')));
+    }
+  }
+
+  Future<void> _toggleCommentDislike(String commentId) async {
+    if (_currentUserId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sign in to dislike comments')),
+      );
+      return;
+    }
+
+    final commentRef = _firestore
+        .collection('posts')
+        .doc(_post.postId)
+        .collection('comments')
+        .doc(commentId);
+
+    try {
+      final snap = await commentRef.get();
+      if (!snap.exists) return;
+      final data = snap.data() as Map<String, dynamic>;
+      final List likedBy = List.from(data['likedBy'] ?? []);
+      final List dislikedBy = List.from(data['dislikedBy'] ?? []);
+
+      if (dislikedBy.contains(_currentUserId)) {
+        await commentRef.update({
+          'dislikes': FieldValue.increment(-1),
+          'dislikedBy': FieldValue.arrayRemove([_currentUserId])
+        });
+      } else {
+        final Map<String, Object> update = {
+          'dislikes': FieldValue.increment(1),
+          'dislikedBy': FieldValue.arrayUnion([_currentUserId])
+        };
+        if (likedBy.contains(_currentUserId)) {
+          update['likes'] = FieldValue.increment(-1);
+          update['likedBy'] = FieldValue.arrayRemove([_currentUserId]);
+        }
+        await commentRef.update(update);
+      }
+    } catch (e) {
+      debugPrint('Error toggling comment dislike: $e');
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to update dislike')));
+    }
+  }
+
+  void _startReplyToComment(String commentId, String userName) {
+    _replyToCommentId = commentId;
+    _commentController.text = '@$userName ';
+    _commentFocusNode.requestFocus();
   }
 
   Widget _buildBottomNavBar() {
     return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF5DBDA8),
+        color: Colors.white,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 10,
-            offset: const Offset(0, -2),
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 12,
+            offset: const Offset(0, -3),
           ),
         ],
       ),
       child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+        child: ElevatedButton(
+          onPressed: _contactOwner,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF5DBDA8),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(30),
+            ),
+          ),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _buildNavItem(icon: Icons.home_rounded),
-              _buildNavItem(icon: Icons.location_on),
-              _buildCenterAddButton(),
-              _buildNavItem(icon: Icons.groups_rounded),
-              _buildNavItem(icon: Icons.person_outline),
+              const Icon(
+                Icons.chat_bubble_outline,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                'Message Owner',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.3,
+                ),
+              ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  Future<void> _contactOwner() async {
+    if (_currentUserId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please login to message the owner')),
+      );
+      return;
+    }
+    
+    if (_post.userId == _currentUserId) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You cannot message yourself')),
+      );
+      return;
+    }
+
+    try {
+      final chatId = await FirestoreService().createChat(
+        senderId: _currentUserId!,
+        receiverId: _post.userId,
+        relatedPostId: _post.postId,
+      );
+      
+      if (mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ChatScreen(
+              chatId: chatId,
+              otherUserId: _post.userId,
+              otherUserName: _post.userName,
+              otherUserPhoto: _post.userPhotoUrl,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error creating chat: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to start chat')),
+        );
+      }
+    }
   }
 
   Widget _buildNavItem({required IconData icon}) {

@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'firestore_service.dart';
 import '../models/user_model.dart';
+import 'profile_update_service.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -29,6 +31,9 @@ class AuthService {
       // Update display name in Firebase Auth
       if (userCredential.user != null) {
         await userCredential.user!.updateDisplayName(name.trim());
+        // Reset profile state for the new user session
+        ProfileUpdateService().reset();
+        ProfileUpdateService().notifyNameUpdate(name.trim());
       }
 
       // Create user profile in Firestore
@@ -99,10 +104,29 @@ class AuthService {
         password: password,
       );
 
+      // Reset profile state for the new user session
+      ProfileUpdateService().reset();
+
+      // Safely re-hydrate session with fresh data from Firestore
+      // We wrap this in a try-catch so login doesn't fail if profile fetch fails
+      final user = userCredential.user;
+      if (user != null) {
+        try {
+          final profile = await _firestoreService.getUserProfile(user.uid);
+          if (profile != null) {
+            ProfileUpdateService().notifyNameUpdate(profile.displayName);
+            ProfileUpdateService().notifyPhotoUpdate(profile.photoUrl);
+          }
+        } catch (e) {
+          debugPrint('Profile re-hydration failed: $e');
+          // Still proceed with login success
+        }
+      }
+
       return {
         'success': true,
         'message': 'Signed in successfully',
-        'user': userCredential.user,
+        'user': user,
       };
     } on FirebaseAuthException catch (e) {
       String message;
@@ -132,7 +156,7 @@ class AuthService {
     } catch (e) {
       return {
         'success': false,
-        'message': 'An unexpected error occurred.',
+        'message': 'An unexpected error occurred. Please try again.',
       };
     }
   }
@@ -140,9 +164,23 @@ class AuthService {
   // Sign out
   Future<void> signOut() async {
     try {
+      final String? uid = _auth.currentUser?.uid;
+      // Reset the global profile state so it doesn't leak to the next user
+      ProfileUpdateService().reset();
+      
+      if (uid != null) {
+        // Best-effort attempt to mark user offline
+        // Wrapped in its own try-catch to prevent strictly failing the logout process
+        try {
+          await _firestoreService.updateUserPresence(uid, false)
+              .timeout(const Duration(seconds: 2));
+        } catch (_) {
+          // Ignore presence update errors (timeouts, permissions, etc.)
+        }
+      }
       await _auth.signOut();
-    } catch (e) {
-      throw Exception('Error signing out');
+    } catch (_) {
+      // Silently ignore sign-out errors to prevent debugger pauses
     }
   }
 

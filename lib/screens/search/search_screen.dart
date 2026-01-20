@@ -7,6 +7,7 @@ import '../../models/community_model.dart';
 import '../post/post_detail_screen.dart';
 import '../community/community_detail_screen.dart';
 import '../profile/profile_screen.dart';
+import '../../widgets/common/app_back_button.dart';
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
@@ -118,22 +119,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
       child: Row(
         children: [
           // Back button
-          GestureDetector(
-            onTap: () => Navigator.pop(context),
-            child: Container(
-              width: 48,
-              height: 48,
-              decoration: const BoxDecoration(
-                color: Color(0xFF5DBDA8),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.chevron_left,
-                color: Colors.white,
-                size: 28,
-              ),
-            ),
-          ),
+          const AppBackButton(),
           
           const SizedBox(width: 12),
           

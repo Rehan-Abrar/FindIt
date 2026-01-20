@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../models/post_model.dart';
-import '../../widgets/navigation/app_bottom_nav_bar.dart';
-import '../home/home_screen.dart';
+import '../../services/firestore_service.dart';
+import '../main/main_screen.dart';
 import '../post/edit_post_screen.dart';
 import 'settings_screen.dart';
+import 'report_user_screen.dart';
+import '../../services/profile_update_service.dart';
+import '../../widgets/common/user_avatar.dart';
+import '../../widgets/common/app_back_button.dart';
 
 class ProfileScreen extends StatefulWidget {
   final String? userId; // Optional - if null, shows current user's profile
@@ -18,23 +22,65 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final User? _currentUser = FirebaseAuth.instance.currentUser;
   int _selectedFilter = 0; // 0 = All, 1 = Lost, 2 = Found
   
   String _userName = 'Anonymous';
   String _userEmail = '';
   String? _userPhotoUrl;
   DateTime? _memberSince;
-  final int _postsCount = 0;
-  final int _returnedCount = 0;
+
+  User? get _currentUser => FirebaseAuth.instance.currentUser;
   
-  bool get _isOwnProfile => widget.userId == null || widget.userId == _currentUser?.uid;
+  bool get _isOwnProfile {
+    final currentUid = _currentUser?.uid;
+    if (currentUid == null) return false;
+    if (widget.userId == null) return true;
+    return widget.userId == currentUid;
+  }
+
   String get _profileUserId => widget.userId ?? _currentUser?.uid ?? '';
 
   @override
   void initState() {
     super.initState();
+    
+    // Check if we already have updates in the service
+    final latestPhoto = ProfileUpdateService().photoUrlNotifier.value;
+    final latestName = ProfileUpdateService().displayNameNotifier.value;
+    
+    if (latestPhoto != null) _userPhotoUrl = latestPhoto;
+    if (latestName != null) _userName = latestName;
+
     _loadUserData();
+    
+    // Listen for global profile updates (only if this is our own profile)
+    if (_isOwnProfile) {
+      ProfileUpdateService().photoUrlNotifier.addListener(_onPhotoUpdate);
+      ProfileUpdateService().displayNameNotifier.addListener(_onNameUpdate);
+    }
+  }
+
+  void _onPhotoUpdate() {
+    if (mounted && _isOwnProfile) {
+      setState(() {
+        _userPhotoUrl = ProfileUpdateService().photoUrlNotifier.value;
+      });
+    }
+  }
+
+  void _onNameUpdate() {
+    if (mounted && _isOwnProfile) {
+      setState(() {
+        _userName = ProfileUpdateService().displayNameNotifier.value ?? 'Anonymous';
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    ProfileUpdateService().photoUrlNotifier.removeListener(_onPhotoUpdate);
+    ProfileUpdateService().displayNameNotifier.removeListener(_onNameUpdate);
+    super.dispose();
   }
 
   Future<void> _loadUserData() async {
@@ -45,27 +91,46 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (userDoc.exists) {
         final userData = userDoc.data();
         setState(() {
-          _userName = userData?['displayName'] ?? 'Anonymous';
+          // Only update name/photo from DB if this isn't our own profile OR we don't have a fresh session update
+          if (!_isOwnProfile || ProfileUpdateService().displayNameNotifier.value == null) {
+            _userName = userData?['displayName'] ?? 'Anonymous';
+          }
           _userEmail = userData?['email'] ?? '';
-          _userPhotoUrl = userData?['photoUrl'];
+          if (!_isOwnProfile || ProfileUpdateService().photoUrlNotifier.value == null) {
+            _userPhotoUrl = userData?['photoUrl'];
+          }
+          
           if (userData?['createdAt'] != null) {
-            _memberSince = DateTime.parse(userData!['createdAt']);
+            final created = userData!['createdAt'];
+            if (created is Timestamp) {
+              _memberSince = created.toDate();
+            } else if (created is String) {
+              _memberSince = DateTime.tryParse(created);
+            }
           }
         });
       } else if (_isOwnProfile && _currentUser != null) {
         setState(() {
-          _userName = _currentUser!.displayName ?? 'Anonymous';
+          if (ProfileUpdateService().displayNameNotifier.value == null) {
+            _userName = _currentUser!.displayName ?? 'Anonymous';
+          }
           _userEmail = _currentUser!.email ?? '';
-          _userPhotoUrl = _currentUser!.photoURL;
+          if (ProfileUpdateService().photoUrlNotifier.value == null) {
+            _userPhotoUrl = _currentUser!.photoURL;
+          }
           _memberSince = _currentUser!.metadata.creationTime;
         });
       }
     } catch (e) {
       if (_isOwnProfile && _currentUser != null) {
         setState(() {
-          _userName = _currentUser!.displayName ?? _currentUser!.email?.split('@')[0] ?? 'Anonymous';
+          if (ProfileUpdateService().displayNameNotifier.value == null) {
+            _userName = _currentUser!.displayName ?? _currentUser!.email?.split('@')[0] ?? 'Anonymous';
+          }
           _userEmail = _currentUser!.email ?? '';
-          _userPhotoUrl = _currentUser!.photoURL;
+          if (ProfileUpdateService().photoUrlNotifier.value == null) {
+            _userPhotoUrl = _currentUser!.photoURL;
+          }
           _memberSince = _currentUser!.metadata.creationTime;
         });
       }
@@ -104,7 +169,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         ),
       ),
-      bottomNavigationBar: const AppBottomNavBar(currentIndex: 4),
     );
   }
 
@@ -114,47 +178,66 @@ class _ProfileScreenState extends State<ProfileScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          GestureDetector(
-            onTap: () {
-              if (_isOwnProfile) {
-                // For own profile, go to home
-                Navigator.pushAndRemoveUntil(
+          if (widget.userId != null)
+            AppBackButton(
+              onTap: () {
+                if (_isOwnProfile) {
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (context) => const MainScreen()),
+                    (route) => false,
+                  );
+                } else {
+                  Navigator.pop(context);
+                }
+              },
+            )
+          else 
+            const SizedBox(width: 48), // Spacer to maintain alignment
+          
+          if (_isOwnProfile)
+            GestureDetector(
+              onTap: () {
+                Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => const HomeScreen()),
-                  (route) => false,
+                  MaterialPageRoute(builder: (context) => const SettingsScreen()),
                 );
-              } else {
-                // For other users' profiles, just go back
-                Navigator.pop(context);
-              }
-            },
-            child: Container(
-              width: 48,
-              height: 48,
-              decoration: const BoxDecoration(
-                color: Color(0xFF5DBDA8),
-                shape: BoxShape.circle,
-              ),
+              },
               child: const Icon(
-                Icons.chevron_left,
-                color: Colors.white,
-                size: 32,
+                Icons.menu,
+                color: Colors.black87,
+                size: 28,
               ),
+            )
+          else
+            // Three dot menu for reporting user etc
+            PopupMenuButton<String>(
+              onSelected: (value) async {
+                if (value == 'report') {
+                  // Report user
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ReportUserScreen()),
+                  );
+                } else if (value == 'block') {
+                   // Block
+                   final fs = FirestoreService();
+                   if (_currentUser?.uid != null) {
+                     await fs.blockUser(_currentUser!.uid, _profileUserId);
+                     if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User blocked')));
+                     if (context.mounted) Navigator.pop(context);
+                   }
+                }
+              },
+              itemBuilder: (BuildContext context) {
+                return {'Report User', 'Block User'}.map((String choice) {
+                  return PopupMenuItem<String>(
+                    value: choice.toLowerCase().split(' ')[0], 
+                    child: Text(choice),
+                  );
+                }).toList();
+              },
             ),
-          ),
-          GestureDetector(
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SettingsScreen()),
-              );
-            },
-            child: const Icon(
-              Icons.menu,
-              color: Colors.black87,
-              size: 28,
-            ),
-          ),
         ],
       ),
     );
@@ -181,20 +264,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             ],
           ),
-          child: CircleAvatar(
+          child: UserAvatar(
+            userId: _profileUserId,
+            initialPhotoUrl: _userPhotoUrl,
+            displayName: _userName,
             radius: 56,
-            backgroundColor: const Color(0xFF5DBDA8).withOpacity(0.2),
-            backgroundImage: _userPhotoUrl != null ? NetworkImage(_userPhotoUrl!) : null,
-            child: _userPhotoUrl == null
-                ? Text(
-                    _userName.isNotEmpty ? _userName[0].toUpperCase() : 'A',
-                    style: const TextStyle(
-                      fontSize: 48,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF5DBDA8),
-                    ),
-                  )
-                : null,
           ),
         ),
         
@@ -242,29 +316,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildStats() {
-    if (_currentUser == null) {
-      return Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          _buildStatItem('0', 'Posts', const Color(0xFF5DBDA8)),
-          const SizedBox(width: 40),
-          _buildStatItem('0', 'Returned', Colors.black87),
-        ],
-      );
-    }
-    
     return StreamBuilder<QuerySnapshot>(
-      stream: _firestore
+      stream: FirebaseFirestore.instance
           .collection('posts')
           .where('userId', isEqualTo: _profileUserId)
           .snapshots(),
       builder: (context, snapshot) {
         int postsCount = 0;
         int returnedCount = 0;
-        
-        if (snapshot.hasError) {
-          debugPrint('Stats error: ${snapshot.error}');
-        }
         
         if (snapshot.hasData) {
           postsCount = snapshot.data!.docs.length;
@@ -356,20 +415,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildUserPosts() {
-    if (_currentUser == null) {
-      return Center(
+    if (_profileUserId.isEmpty) {
+      return const Center(
         child: Padding(
-          padding: const EdgeInsets.all(40),
-          child: Text(
-            'Please login to see your posts',
-            style: TextStyle(color: Colors.grey[400]),
-          ),
+          padding: EdgeInsets.all(40),
+          child: CircularProgressIndicator(color: Color(0xFF5DBDA8)),
         ),
       );
     }
     
     return StreamBuilder<QuerySnapshot>(
-      stream: _firestore
+      stream: FirebaseFirestore.instance
           .collection('posts')
           .where('userId', isEqualTo: _profileUserId)
           .snapshots(),
@@ -379,19 +435,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Padding(
               padding: EdgeInsets.all(20),
               child: CircularProgressIndicator(color: Color(0xFF5DBDA8)),
-            ),
-          );
-        }
-
-        if (snapshot.hasError) {
-          debugPrint('Posts error: ${snapshot.error}');
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(40),
-              child: Text(
-                'Error loading posts',
-                style: TextStyle(color: Colors.grey[400]),
-              ),
             ),
           );
         }
@@ -408,14 +451,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
           );
         }
 
-        var posts = snapshot.data!.docs
-            .map((doc) => PostModel.fromMap(doc.data() as Map<String, dynamic>))
-            .toList();
+        var posts = snapshot.data!.docs.map((doc) {
+          final data = doc.data() as Map<String, dynamic>;
+          data['postId'] = doc.id;
+          return PostModel.fromMap(data);
+        }).toList();
         
-        // Sort by createdAt in Dart instead of Firestore
         posts.sort((a, b) => (b.createdAt ?? DateTime.now()).compareTo(a.createdAt ?? DateTime.now()));
 
-        // Apply filter
         if (_selectedFilter == 1) {
           posts = posts.where((post) => post.type == 'lost').toList();
         } else if (_selectedFilter == 2) {
@@ -427,7 +470,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Padding(
               padding: const EdgeInsets.all(40),
               child: Text(
-                'No ${_selectedFilter == 1 ? 'lost' : _selectedFilter == 2 ? 'found' : ''} posts',
+                'No posts found for this category',
                 style: TextStyle(color: Colors.grey[400]),
               ),
             ),
@@ -582,53 +625,54 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
           ),
           
-          const SizedBox(height: 12),
-          
-          // Action Buttons
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => EditPostScreen(post: post),
+          if (_isOwnProfile && post.userId == _currentUser?.uid) ...[
+            const SizedBox(height: 12),
+            // Action Buttons
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => EditPostScreen(post: post),
+                        ),
+                      ).then((result) {
+                        if (result == true) {
+                          setState(() {}); // Refresh the list
+                        }
+                      });
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF5DBDA8),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
                       ),
-                    ).then((result) {
-                      if (result == true) {
-                        setState(() {}); // Refresh the list
-                      }
-                    });
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF5DBDA8),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
                     ),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: const Text('Edit', style: TextStyle(fontWeight: FontWeight.w600)),
                   ),
-                  child: const Text('Edit', style: TextStyle(fontWeight: FontWeight.w600)),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => _markAsReturned(post),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.black87,
-                    side: const BorderSide(color: Colors.black87),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => _markAsReturned(post),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.black87,
+                      side: const BorderSide(color: Colors.black87),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
                     ),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: const Text('Mark Returned', style: TextStyle(fontWeight: FontWeight.w600)),
                   ),
-                  child: const Text('Mark Returned', style: TextStyle(fontWeight: FontWeight.w600)),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -641,7 +685,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final difference = now.difference(dateTime);
     
     if (difference.inDays > 0) {
-      return '${difference.inDays} ${difference.inDays == 1 ? 'hour' : 'hours'} ago';
+      return '${difference.inDays} ${difference.inDays == 1 ? 'day' : 'days'} ago';
     } else if (difference.inHours > 0) {
       return '${difference.inHours} ${difference.inHours == 1 ? 'hour' : 'hours'} ago';
     } else if (difference.inMinutes > 0) {
@@ -652,6 +696,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _markAsReturned(PostModel post) async {
+    // SECURITY: strictly check ownership before proceeding
+    if (_currentUser == null || post.userId != _currentUser!.uid) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Unauthorized')));
+      return;
+    }
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -677,6 +727,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       await _firestore.collection('posts').doc(post.postId).update({
         'status': 'returned',
       });
+      setState(() {});
     }
   }
 }

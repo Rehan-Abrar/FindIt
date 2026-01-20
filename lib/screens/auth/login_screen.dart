@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'signup_screen.dart';
-import '../home/home_screen.dart';
+import '../../screens/main/main_screen.dart';
 import '../../services/auth_service.dart';
+import '../../utils/validation_utils.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -189,6 +190,12 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
+    // Validate email format
+    if (!ValidationUtils.isValidEmail(_emailController.text)) {
+      _showErrorDialog('Please enter a valid email address');
+      return;
+    }
+
     setState(() {
       _isLoading = true;
     });
@@ -209,7 +216,7 @@ class _LoginScreenState extends State<LoginScreen> {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (context) => const HomeScreen(),
+            builder: (context) => const MainScreen(),
           ),
         );
       }

@@ -121,7 +121,9 @@ class _MapScreenState extends State<MapScreen> {
         final postLatLng = LatLng(location.latitude, location.longitude);
         
         if (_currentBounds!.contains(postLatLng)) {
-          filtered.add(PostModel.fromMap(data));
+          final postData = Map<String, dynamic>.from(data);
+          postData['postId'] = doc.id;
+          filtered.add(PostModel.fromMap(postData));
         }
       }
     }
@@ -473,27 +475,10 @@ class _MapScreenState extends State<MapScreen> {
                   color: const Color(0xFF5DBDA8),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(
                   children: [
-                    // Back button
-                    GestureDetector(
-                      onTap: () {
-                        Navigator.pushAndRemoveUntil(
-                          context,
-                          MaterialPageRoute(builder: (context) => const HomeScreen()),
-                          (route) => false,
-                        );
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        child: const Icon(
-                          Icons.chevron_left,
-                          color: Colors.white,
-                          size: 28,
-                        ),
-                      ),
-                    ),
+                    // No back button needed as it's a main tab
                     
                     // Search Field
                     Expanded(
@@ -626,7 +611,6 @@ class _MapScreenState extends State<MapScreen> {
           ),
         ],
       ),
-      bottomNavigationBar: const AppBottomNavBar(currentIndex: 1),
     );
   }
 

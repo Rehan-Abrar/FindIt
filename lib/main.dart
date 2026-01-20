@@ -14,6 +14,9 @@ void main() async {
   FirebaseAnalytics analytics = FirebaseAnalytics.instance;
   analytics.logEvent(name: 'app_open', parameters: {'status': 'success'});
 
+  // Initialize Notifications
+  // await NotificationService().initialize(); // Uncomment in production when google-services.json is updated
+
   runApp(const MainApp());
 }
 

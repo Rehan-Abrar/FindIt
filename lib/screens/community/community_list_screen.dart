@@ -40,7 +40,6 @@ class _CommunityListScreenState extends State<CommunityListScreen> {
           ],
         ),
       ),
-      bottomNavigationBar: const AppBottomNavBar(currentIndex: 3),
       floatingActionButton: FloatingActionButton(
         onPressed: () {
           Navigator.push(
@@ -63,27 +62,13 @@ class _CommunityListScreenState extends State<CommunityListScreen> {
         children: [
           Row(
             children: [
-              // Back button
-              GestureDetector(
-                onTap: () {
-                  Navigator.pushAndRemoveUntil(
-                    context,
-                    MaterialPageRoute(builder: (context) => const HomeScreen()),
-                    (route) => false,
-                  );
-                },
-                child: Container(
-                  width: 48,
-                  height: 48,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF5DBDA8),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.chevron_left,
-                    color: Colors.white,
-                    size: 28,
-                  ),
+              // FindIt Title or Tab Title
+              const Text(
+                'Communities',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF5DBDA8),
                 ),
               ),
               

@@ -21,6 +21,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
   
   late CommunityModel _community;
   bool _isMember = false;
+  bool _isCreator = false;
 
   @override
   void initState() {
@@ -31,9 +32,12 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
 
   void _checkMembership() {
     if (_currentUserId != null) {
-      setState(() {
-        _isMember = _community.memberIds.contains(_currentUserId);
-      });
+      if (mounted) {
+        setState(() {
+          _isMember = _community.memberIds.contains(_currentUserId);
+          _isCreator = _community.createdBy == _currentUserId;
+        });
+      }
     }
   }
 
@@ -131,6 +135,26 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
           
           const Spacer(),
           
+          // Edit/Admin button (only for creator)
+          if (_isCreator)
+            GestureDetector(
+              onTap: _showAdminMenu,
+              child: Container(
+                width: 48,
+                height: 48,
+                margin: const EdgeInsets.only(right: 8),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF5DBDA8),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.settings,
+                  color: Colors.white,
+                  size: 24,
+                ),
+              ),
+            ),
+          
           // Search button
           Container(
             width: 48,
@@ -145,22 +169,133 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
               size: 24,
             ),
           ),
-          
-          const SizedBox(width: 8),
-          
-          // Profile button
-          Container(
-            width: 48,
-            height: 48,
-            decoration: const BoxDecoration(
-              color: Color(0xFF5DBDA8),
-              shape: BoxShape.circle,
+        ],
+      ),
+    );
+  }
+
+  void _showAdminMenu() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit, color: Color(0xFF5DBDA8)),
+              title: const Text('Edit Community'),
+              onTap: () {
+                Navigator.pop(context);
+                _showEditCommunityDialog();
+              },
             ),
-            child: const Icon(
-              Icons.person_outline,
-              color: Colors.white,
-              size: 24,
+            ListTile(
+              leading: const Icon(Icons.delete_outline, color: Colors.red),
+              title: const Text('Delete Community', style: TextStyle(color: Colors.red)),
+              onTap: () {
+                Navigator.pop(context);
+                _confirmDeleteCommunity();
+              },
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showEditCommunityDialog() {
+    final nameController = TextEditingController(text: _community.name);
+    final descController = TextEditingController(text: _community.description);
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit Community'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              decoration: const InputDecoration(labelText: 'Community Name'),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: descController,
+              decoration: const InputDecoration(labelText: 'Description'),
+              maxLines: 3,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (nameController.text.trim().isEmpty) return;
+              
+              Navigator.pop(context); // Close dialog
+              
+              try {
+                await _firestore.collection('communities').doc(_community.id).update({
+                  'name': nameController.text.trim(),
+                  'description': descController.text.trim(),
+                });
+                _showSnackBar('Community updated successfully');
+              } catch (e) {
+                _showSnackBar('Failed to update community');
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF5DBDA8),
+            ),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDeleteCommunity() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Community'),
+        content: const Text(
+          'Are you sure you want to delete this community? This action cannot be undone and all community data will be lost.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context); // Close dialog
+              
+              try {
+                // Delete community doc
+                await _firestore.collection('communities').doc(_community.id).delete();
+                
+                // Note: Ideally, we should also batch update all posts to remove communityId
+                // but for MVP/prototype, deleting the community entry is sufficient.
+                
+                if (mounted) {
+                  _showSnackBar('Community deleted');
+                  Navigator.pop(context); // Return to list
+                }
+              } catch (e) {
+                _showSnackBar('Failed to delete community');
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+            ),
+            child: const Text('Delete'),
           ),
         ],
       ),
@@ -175,8 +310,14 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
           final data = snapshot.data!.data() as Map<String, dynamic>;
           data['id'] = snapshot.data!.id; // Preserve the document ID
           _community = CommunityModel.fromMap(data);
-          _isMember = _currentUserId != null && 
-              _community.memberIds.contains(_currentUserId);
+          
+          if (_currentUserId != null) {
+            _isMember = _community.memberIds.contains(_currentUserId);
+            _isCreator = _community.createdBy == _currentUserId;
+          }
+        } else if (snapshot.connectionState == ConnectionState.active && (!snapshot.hasData || !snapshot.data!.exists)) {
+           // Community deleted or not found
+           return const SizedBox.shrink(); 
         }
 
         return Container(
@@ -208,29 +349,30 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                       ),
                     ),
                   ),
-                  ElevatedButton(
-                    onPressed: _toggleMembership,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _isMember 
-                          ? Colors.grey[200] 
-                          : const Color(0xFF5DBDA8),
-                      foregroundColor: _isMember 
-                          ? Colors.black87 
-                          : Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
+                  if (!_isCreator) // Don't show Join/Leave for creator
+                    ElevatedButton(
+                      onPressed: _toggleMembership,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _isMember 
+                            ? Colors.grey[200] 
+                            : const Color(0xFF5DBDA8),
+                        foregroundColor: _isMember 
+                            ? Colors.black87 
+                            : Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 10,
+                        ),
+                        elevation: 0,
                       ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 10,
+                      child: Text(
+                        _isMember ? 'Joined' : 'Join',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
-                      elevation: 0,
                     ),
-                    child: Text(
-                      _isMember ? 'Joined' : 'Join',
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
                 ],
               ),
               
@@ -342,9 +484,11 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
           );
         }
 
-        final posts = snapshot.data!.docs
-            .map((doc) => PostModel.fromMap(doc.data() as Map<String, dynamic>))
-            .toList();
+        final posts = snapshot.data!.docs.map((doc) {
+          final data = doc.data() as Map<String, dynamic>;
+          data['postId'] = doc.id; // Map the doc ID to postId
+          return PostModel.fromMap(data);
+        }).toList();
 
         return ListView.builder(
           padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -358,6 +502,10 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
   }
 
   Widget _buildPostCard(PostModel post) {
+    // Only show "Remove from community" if current user is creator AND post isn't theirs (or IS theirs, admin power)
+    // Actually, creator should be able to remove ANY post.
+    final canManagePost = _isCreator;
+
     return GestureDetector(
       onTap: () {
         Navigator.push(
@@ -430,8 +578,27 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                     ),
                   ),
                   
-                  // 3 dots menu
-                  const Icon(Icons.more_vert, color: Colors.grey),
+                  // 3 dots menu (Active for creator)
+                  if (canManagePost)
+                    PopupMenuButton<String>(
+                      onSelected: (value) {
+                         if (value == 'remove') {
+                           _confirmRemovePost(post);
+                         }
+                      },
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(
+                          value: 'remove',
+                          child: Text('Remove from Community', style: TextStyle(color: Colors.red)),
+                        ),
+                      ],
+                      child: const Padding(
+                        padding: EdgeInsets.all(8.0),
+                        child: Icon(Icons.more_vert, color: Colors.grey),
+                      ),
+                    )
+                  else
+                    const Icon(Icons.more_vert, color: Colors.grey),
                 ],
               ),
             ),
@@ -464,6 +631,38 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
             const SizedBox(height: 12),
           ],
         ),
+      ),
+    );
+  }
+
+  void _confirmRemovePost(PostModel post) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove Post'),
+        content: const Text('Remove this post from the community? It will still exist in the main feed.'),
+        actions: [
+          TextButton(
+             onPressed: () => Navigator.pop(context),
+             child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              try {
+                // Remove communityId from post
+                await _firestore.collection('posts').doc(post.postId).update({
+                  'communityId': null,
+                });
+                _showSnackBar('Post removed from community');
+              } catch(e) {
+                _showSnackBar('Failed to remove post');
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Remove'),
+          ),
+        ],
       ),
     );
   }

@@ -1,7 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../../services/auth_service.dart';
 import '../auth/login_screen.dart';
 import '../home/home_screen.dart';
+import 'account_settings_screen.dart';
+import 'saved_posts_screen.dart';
+import 'archive_screen.dart';
+import 'notification_settings_screen.dart';
+import 'engaged_posts_screen.dart';
+import 'reported_posts_screen.dart';
+import 'report_user_screen.dart';
+import 'blocked_users_screen.dart';
+import '../../widgets/common/app_header.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -11,62 +21,25 @@ class SettingsScreen extends StatelessWidget {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       body: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
-              child: SingleChildScrollView(
-                child: Column(
-                  children: [
-                    // Header
-                    _buildHeader(context),
-                    
-                    const SizedBox(height: 20),
-                    
-                    // Settings List
-                    _buildSettingsList(context),
-                  ],
-                ),
-              ),
-            ),
-            
-            // Bottom Navigation Bar
-            _buildBottomNavBar(context),
-          ],
+        child: SingleChildScrollView(
+          child: Column(
+            children: [
+              // Header
+              _buildHeader(context),
+              
+              const SizedBox(height: 20),
+              
+              // Settings List
+              _buildSettingsList(context),
+            ],
+          ),
         ),
       ),
     );
   }
 
   Widget _buildHeader(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        children: [
-          GestureDetector(
-            onTap: () {
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (context) => const HomeScreen()),
-                (route) => false,
-              );
-            },
-            child: Container(
-              width: 48,
-              height: 48,
-              decoration: const BoxDecoration(
-                color: Color(0xFF5DBDA8),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.chevron_left,
-                color: Colors.white,
-                size: 32,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+    return const AppHeader(title: 'Settings');
   }
 
   Widget _buildSettingsList(BuildContext context) {
@@ -90,9 +63,11 @@ class SettingsScreen extends StatelessWidget {
             icon: Icons.person_outline,
             iconColor: Colors.grey[600]!,
             title: 'Account Settings',
-            subtitle: 'Passwords, security, personal details.',
             onTap: () {
-              // TODO: Navigate to account settings
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const AccountSettingsScreen()),
+              );
             },
           ),
           
@@ -104,7 +79,10 @@ class SettingsScreen extends StatelessWidget {
             iconColor: Colors.grey[600]!,
             title: 'Saved Posts',
             onTap: () {
-              // TODO: Navigate to saved posts
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SavedPostsScreen()),
+              );
             },
           ),
           
@@ -116,7 +94,10 @@ class SettingsScreen extends StatelessWidget {
             iconColor: Colors.grey[600]!,
             title: 'Archive',
             onTap: () {
-              // TODO: Navigate to archive
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const ArchiveScreen()),
+              );
             },
           ),
           
@@ -128,7 +109,10 @@ class SettingsScreen extends StatelessWidget {
             iconColor: Colors.grey[600]!,
             title: 'Notifications',
             onTap: () {
-              // TODO: Navigate to notifications settings
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const NotificationSettingsScreen()),
+              );
             },
           ),
           
@@ -140,7 +124,10 @@ class SettingsScreen extends StatelessWidget {
             iconColor: Colors.grey[600]!,
             title: 'Engaged posts',
             onTap: () {
-              // TODO: Navigate to engaged posts
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const EngagedPostsScreen()),
+              );
             },
           ),
           
@@ -153,7 +140,10 @@ class SettingsScreen extends StatelessWidget {
             title: 'Reported posts',
             titleColor: Colors.red,
             onTap: () {
-              // TODO: Navigate to reported posts
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const ReportedPostsScreen()),
+              );
             },
           ),
           
@@ -166,7 +156,10 @@ class SettingsScreen extends StatelessWidget {
             title: 'Report the user',
             titleColor: Colors.red,
             onTap: () {
-              // TODO: Navigate to report user
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const ReportUserScreen()),
+              );
             },
           ),
           
@@ -179,7 +172,10 @@ class SettingsScreen extends StatelessWidget {
             title: 'Blocked Users',
             titleColor: Colors.red,
             onTap: () {
-              // TODO: Navigate to blocked users
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const BlockedUsersScreen()),
+              );
             },
           ),
           
@@ -296,7 +292,7 @@ class SettingsScreen extends StatelessWidget {
     );
 
     if (confirmed == true) {
-      await FirebaseAuth.instance.signOut();
+      await AuthService().signOut();
       if (context.mounted) {
         Navigator.pushAndRemoveUntil(
           context,
@@ -305,70 +301,5 @@ class SettingsScreen extends StatelessWidget {
         );
       }
     }
-  }
-
-  Widget _buildBottomNavBar(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF5DBDA8),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 10,
-            offset: const Offset(0, -2),
-          ),
-        ],
-      ),
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _buildNavItem(context, icon: Icons.home_rounded),
-              _buildNavItem(context, icon: Icons.location_on),
-              _buildCenterAddButton(),
-              _buildNavItem(context, icon: Icons.groups_rounded),
-              _buildNavItem(context, icon: Icons.person_outline, isSelected: true),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNavItem(BuildContext context, {required IconData icon, bool isSelected = false}) {
-    return GestureDetector(
-      onTap: () {
-        if (!isSelected) {
-          Navigator.pop(context);
-        }
-      },
-      child: Icon(
-        icon,
-        color: Colors.white,
-        size: 28,
-      ),
-    );
-  }
-
-  Widget _buildCenterAddButton() {
-    return Container(
-      width: 44,
-      height: 44,
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.2),
-        shape: BoxShape.circle,
-        border: Border.all(
-          color: Colors.white,
-          width: 2,
-        ),
-      ),
-      child: const Icon(
-        Icons.add,
-        color: Colors.white,
-        size: 24,
-      ),
-    );
   }
 }

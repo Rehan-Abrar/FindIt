@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import '../models/user_model.dart';
 
 class FirestoreService {
@@ -42,6 +43,27 @@ class FirestoreService {
     } catch (e) {
       throw Exception('Error updating user profile: $e');
     }
+  }
+
+  // Presence logic: update user's online status and last seen timestamp
+  Future<void> updateUserPresence(String uid, bool isOnline) async {
+    // Basic safety check: don't attempt write if user is not fully authed
+    if (uid.isEmpty) return;
+    
+    try {
+      await _firestore.collection(usersCollection).doc(uid).update({
+        'isOnline': isOnline,
+        'lastSeen': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      // Don't throw here to avoid debugger pauses during logout flows
+      debugPrint('Presence update suppressed: $e');
+    }
+  }
+
+  // Presence logic: listen to a user's presence in real-time
+  Stream<DocumentSnapshot> getUserPresenceStream(String uid) {
+    return _firestore.collection(usersCollection).doc(uid).snapshots();
   }
 
   // Delete user profile
@@ -268,16 +290,35 @@ class FirestoreService {
   // Mark messages as read
   Future<void> markMessagesAsRead(String chatId, String currentUserId) async {
     try {
-      final messages = await _firestore
+      // Fetch unread messages, then update only those not sent by current user.
+      final messagesSnap = await _firestore
           .collection(chatsCollection)
           .doc(chatId)
           .collection('messages')
           .where('isRead', isEqualTo: false)
-          .where('senderId', isNotEqualTo: currentUserId)
           .get();
 
-      for (var doc in messages.docs) {
-        await doc.reference.update({'isRead': true});
+      if (messagesSnap.docs.isEmpty) return;
+
+      // Use batched writes (max 500 operations per batch).
+      const int batchSize = 500;
+      final docs = messagesSnap.docs;
+      int i = 0;
+
+      while (i < docs.length) {
+        final batch = _firestore.batch();
+        final end = (i + batchSize) > docs.length ? docs.length : i + batchSize;
+
+        for (var j = i; j < end; j++) {
+          final doc = docs[j];
+          final senderId = (doc.data() as Map<String, dynamic>)['senderId'] as String?;
+          if (senderId != null && senderId != currentUserId) {
+            batch.update(doc.reference, {'isRead': true});
+          }
+        }
+
+        await batch.commit();
+        i = end;
       }
     } catch (e) {
       throw Exception('Error marking messages as read: $e');
@@ -306,6 +347,117 @@ class FirestoreService {
       });
     } catch (e) {
       throw Exception('Error creating report: $e');
+    }
+  }
+
+  // ==================== SAVED POSTS ====================
+
+  // Save a post for a user
+  Future<void> savePost(String userId, String postId) async {
+    try {
+      final ref = _firestore.collection('saved_posts').doc();
+      await ref.set({
+        'savedId': ref.id,
+        'userId': userId,
+        'postId': postId,
+        'savedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      throw Exception('Error saving post: $e');
+    }
+  }
+
+  Future<void> removeSavedPost(String userId, String postId) async {
+    try {
+      final snap = await _firestore
+          .collection('saved_posts')
+          .where('userId', isEqualTo: userId)
+          .where('postId', isEqualTo: postId)
+          .get();
+      for (var doc in snap.docs) {
+        await doc.reference.delete();
+      }
+    } catch (e) {
+      throw Exception('Error removing saved post: $e');
+    }
+  }
+
+  Stream<QuerySnapshot> getSavedPosts(String userId) {
+    return _firestore
+        .collection('saved_posts')
+        .where('userId', isEqualTo: userId)
+        .orderBy('savedAt', descending: true)
+        .snapshots();
+  }
+
+  // ==================== ARCHIVE ====================
+
+  Stream<QuerySnapshot> getUserArchivedPosts(String userId) {
+    return _firestore
+        .collection(postsCollection)
+        .where('userId', isEqualTo: userId)
+        .where('status', isEqualTo: 'archived')
+        .orderBy('createdAt', descending: true)
+        .snapshots();
+  }
+
+  // ==================== ENGAGED POSTS ====================
+
+  Stream<QuerySnapshot> getEngagedPosts(String userId) {
+    return _firestore
+        .collection(postsCollection)
+        .where('likedBy', arrayContains: userId)
+        .snapshots();
+  }
+
+  // ==================== USER REPORTS ====================
+
+  Stream<QuerySnapshot> getUserReports(String userId) {
+    return _firestore
+        .collection(reportsCollection)
+        .where('reporterId', isEqualTo: userId)
+        .orderBy('createdAt', descending: true)
+        .snapshots();
+  }
+
+  // ==================== BLOCKED USERS ====================
+
+  Future<void> blockUser(String userId, String blockedUserId) async {
+    try {
+      await _firestore.collection(usersCollection).doc(userId).update({
+        'blockedUsers': FieldValue.arrayUnion([blockedUserId])
+      });
+    } catch (e) {
+      throw Exception('Error blocking user: $e');
+    }
+  }
+
+  Future<void> unblockUser(String userId, String blockedUserId) async {
+    try {
+      await _firestore.collection(usersCollection).doc(userId).update({
+        'blockedUsers': FieldValue.arrayRemove([blockedUserId])
+      });
+    } catch (e) {
+      throw Exception('Error unblocking user: $e');
+    }
+  }
+
+  Future<List<UserModel>> getBlockedUsers(String userId) async {
+    try {
+      final doc = await _firestore.collection(usersCollection).doc(userId).get();
+      if (!doc.exists) return [];
+      final data = doc.data() as Map<String, dynamic>?;
+      final list = List<String>.from(data?['blockedUsers'] ?? []);
+      final users = <UserModel>[];
+      for (var uid in list) {
+        final uDoc = await _firestore.collection(usersCollection).doc(uid).get();
+        if (uDoc.exists) {
+          users.add(UserModel.fromMap(uDoc.data() as Map<String, dynamic>));
+        }
+      }
+      return users;
+    } catch (e) {
+      throw Exception('Error fetching blocked users: $e');
     }
   }
 
